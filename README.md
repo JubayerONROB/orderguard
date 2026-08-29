@@ -102,7 +102,10 @@ Every cancellation, resize, and deferral the rule engine proposes goes through h
 approval before submission — the approval screen (`ui/app.py`) shows the decision, every
 rule that fired and what happened to it, the final basket with repairs marked, proposed
 cancellations listed separately, and any cash left undeployed. Nothing is sent to a broker
-without an explicit approve click.
+without an explicit approve click. Below is that screen in fixture mode, reviewing the
+`case_003` instruction above:
+
+![OrderGuard approval screen, fixture mode, case_003](docs/screenshot.png)
 
 ## The repair principle
 
@@ -150,6 +153,9 @@ records every iteration, including one held-out case's ground truth being correc
 its first live run (a case-authoring arithmetic error caught by the free, deterministic
 `rules_only` pass, not a system defect).
 
+Combined across both suites (22 cases): **agent 22/22 (100%)**, **baseline 14/22 (63.6%)**.
+The main 18 drove two iterations; the held-out 4 drove none.
+
 ## Quick start
 
 ```
@@ -178,3 +184,30 @@ guidance. What it checks is execution safety: given an instruction a trader has 
 decided on, does the resulting basket violate a rule that would cost them access, money, or
 an unintended tax consequence, and if so, is there a principled fix or does a human need to
 see it before anything is sent.
+
+## What I'd build differently
+
+The same bug appeared three times during this project, in three different components, and
+it took me two of those occurrences to see it as one bug rather than three. R4's repair
+incidentally satisfied R3, so R3 was never reported as having fired (case_017). The
+compiler pre-emptively cancelled a stacking open order on its own initiative, so R4 never
+fired at all (case_003). And `build_llm_client` called `get_settings()` before the code path
+ever reached the cassette cache, so replay mode — whose entire reason to exist is needing no
+credentials — demanded them anyway.
+
+The generalization is: in a pipeline where several components can fix the same problem,
+whichever one fixes it first erases the evidence that the problem ever existed. A system
+gets quieter exactly as it gets better, and the trader (or the audit log, or the judge
+running `--llm-mode replay` with no API key) loses information they needed, precisely
+because something worked. The fix in each case turned out to be structural, not incidental:
+detection has to run against the original input and stay separated from remediation. That's
+why the rule engine evaluates every repairable rule against the unmodified plan before any
+repair runs, rather than checking each rule only after the previous one has already changed
+the basket.
+
+What I'd do differently next time: build that detection/remediation split in from the
+start, as an explicit rule rather than something I re-derived twice under different names.
+And I'd write the held-out cases before iterating on the main set, not after — writing them
+last meant the main suite's 100% was already banked before anything tested whether the
+fixes generalized, which is backwards; a held-out set only earns its name if it exists
+before the behavior it's checking does.
