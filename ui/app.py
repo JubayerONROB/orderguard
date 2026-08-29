@@ -12,6 +12,10 @@ import sys
 from decimal import Decimal
 from pathlib import Path
 
+# `eval/` is a plain directory at the repo root, not part of the installed `orderguard`
+# package -- Streamlit Cloud (and some local invocations) don't reliably put the repo
+# root on sys.path just because ui/app.py lives one level under it, so `import eval...`
+# below would fail unpredictably depending on how/where the app was launched from.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -36,6 +40,13 @@ from orderguard.schemas.user_constraints import UserConstraints
 from ui.rule_labels import ALL_RULE_CODES, rule_label
 
 st.set_page_config(page_title="OrderGuard", layout="wide")
+
+try:
+    get_settings()
+    CREDENTIALS_AVAILABLE = True
+except Exception:  # noqa: BLE001 -- any missing/invalid config means "no credentials here",
+    # not a page crash; this is what keeps a public deployment (no .env at all) fixture-only.
+    CREDENTIALS_AVAILABLE = False
 
 TRAJECTORY_PATH = Path(__file__).parent.parent / "eval" / "runs" / "trajectories" / "ui.jsonl"
 DEFAULT_FIXTURE = "retail_rotation"
@@ -257,8 +268,17 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Mode")
-        mode_choice = st.radio("Data source", ["Fixture (replay, no network)", "Live Alpaca paper account"], index=0)
-        fixture_mode = mode_choice.startswith("Fixture")
+        mode_options = ["Fixture (replay, no network)", "Live Alpaca paper account"]
+        if CREDENTIALS_AVAILABLE:
+            mode_choice = st.radio("Data source", mode_options, index=0)
+            fixture_mode = mode_choice.startswith("Fixture")
+        else:
+            st.radio("Data source", mode_options, index=0, disabled=True)
+            fixture_mode = True
+            st.caption(
+                "This deployment runs from frozen fixtures with cassette replay only -- "
+                "it has no broker credentials, so live mode is unavailable here."
+            )
 
         fixture_name = None
         if fixture_mode:
@@ -329,7 +349,7 @@ def main() -> None:
                     trajectory.log_event("human_approval", {"plan": final_plan.model_dump(mode="json")})
                     if st.session_state.fixture_mode:
                         st.session_state.submission_results = [
-                            "Approved (fixture mode -- no live broker connected; this simulates approval)"
+                            "SIMULATED -- fixture mode, no broker connected. No real order was placed."
                         ]
                     else:
                         client = AlpacaClient(get_settings())
@@ -350,7 +370,10 @@ def main() -> None:
 
     if st.session_state.get("submitted"):
         st.divider()
-        st.success("Submitted.")
+        if st.session_state.get("fixture_mode"):
+            st.warning("Simulated -- fixture mode. Nothing was sent to a real broker.")
+        else:
+            st.success("Submitted.")
         for line in st.session_state.get("submission_results", []):
             st.write(line)
         if st.button("Start over"):

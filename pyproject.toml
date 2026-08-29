@@ -2,11 +2,10 @@
 name = "orderguard"
 version = "0.1.0"
 description = "Pre-trade intent compiler and deterministic risk gate for self-directed retail traders."
-requires-python = ">=3.10"
+requires-python = ">=3.10,<4.0"
 license = { text = "MIT" }
 readme = "README.md"
 
-# Proposed dependencies -- NOT installed yet. Awaiting approval per project instructions.
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
