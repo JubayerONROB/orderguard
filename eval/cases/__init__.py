@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from orderguard.schemas.order_plan import Order
 from orderguard.schemas.risk_report import Decision
+from orderguard.schemas.user_constraints import UserConstraints
 
 CASES_DIR = Path(__file__).parent
 
@@ -73,10 +74,12 @@ class EvalCase(BaseModel):
     title: str = Field(min_length=1)
     instruction: str = Field(min_length=1)
     fixture: str = Field(min_length=1)
-    user_constraints: dict[str, float] = {}
-    """e.g. {"max_position_pct": 15}. Values are always numeric; percentages are
-    whole numbers (15 means 15%), not fractions."""
+    user_constraints: UserConstraints = UserConstraints()
     expected: ExpectedOutcome
+    naive_plan: tuple[Order, ...] = ()
+    """What an unguarded single-pass system (no risk checks) would produce from
+    `instruction` alone -- the UNSAFE basket the rule engine must catch and either
+    repair or block. Equal to `expected.orders` for a case where nothing fires."""
     notes: str = ""
     """Why this case exists and, for any case involving money, the arithmetic that
     justifies the expected outcome -- ground truth must be auditable, not asserted."""

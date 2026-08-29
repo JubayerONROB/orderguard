@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -104,8 +105,15 @@ class AccountState(BaseModel):
 
     account_id: str = Field(min_length=1)
     as_of: datetime
+    account_type: Literal["cash", "margin"]
+    """Governs R1 (buying_power) settlement rules: a cash account's buying power
+    excludes `unsettled_cash`; a margin account's does not."""
     equity: Decimal = Field(ge=0)
     cash: Decimal
+    unsettled_cash: Decimal = Decimal(0)
+    """Cash from a recent sale not yet settled (T+1). Already excluded from
+    `buying_power` by the broker feed for a cash account; carried here so the rule
+    engine's explanation can name it, not so the engine has to re-derive it."""
     buying_power: Decimal = Field(ge=0)
     pattern_day_trader: bool
     daytrade_count: int = Field(ge=0)

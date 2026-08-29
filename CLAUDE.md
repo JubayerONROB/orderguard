@@ -26,6 +26,20 @@ R1, R2, R3, and R4 are **basket-level**: they cannot be evaluated on one order i
 That is the technical heart of the project — the engine must reason about the whole proposed
 basket together, not order-by-order.
 
+## The repair principle
+
+Repair only when the correction is uniquely determined by a constraint the user themselves
+stated, or by a pure timing shift that preserves the rest of the basket. Otherwise block.
+
+    R3 CONCENTRATION  -> REPAIR. The user stated the cap; rounding down enforces their words.
+    R4 OPEN_ORDERS    -> REPAIR. Cancel-and-resize is arithmetically unique.
+    R2 PDT            -> REPAIR by deferral IF other orders in the basket still execute today.
+                         If deferral would empty the basket, BLOCK. (case_003 vs case_002.)
+    R6 SESSION        -> Identical logic to R2. (case_013 blocks: single order, empty basket.)
+    R1 BUYING_POWER   -> BLOCK. An external limit, not user intent. No principled resize exists.
+    R7 ELIGIBILITY    -> BLOCK. Nothing to repair.
+    R5 WASH_SALE      -> WARN. A tax consequence the user may knowingly accept.
+
 ## Hard architectural constraints
 
 - The rule engine (`src/orderguard/rules/`) is **100% deterministic Python with zero LLM

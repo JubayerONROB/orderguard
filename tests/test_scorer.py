@@ -7,7 +7,13 @@ from decimal import Decimal
 from eval.cases import EvalCase, ExpectedCancellation, ExpectedOutcome
 from eval.scorer import aggregate, score_case
 from orderguard.schemas.order_plan import Order, OrderPlan
-from orderguard.schemas.risk_report import Decision, RiskReport, RuleResult, Severity
+from orderguard.schemas.risk_report import (
+    Decision,
+    Disposition,
+    FiredRule,
+    RiskReport,
+    Severity,
+)
 
 CASE_ALLOW = EvalCase(
     id="case_hand_allow",
@@ -27,6 +33,18 @@ CASE_BLOCK = EvalCase(
     instruction="sell my AAPL",
     fixture="unused",
     expected=ExpectedOutcome(decision=Decision.BLOCK, rules_fired=("R2_PDT",), orders=()),
+)
+
+CASE_ALLOW_WITH_WARNING = EvalCase(
+    id="case_hand_warn",
+    title="hand-built allow-with-warning case (mirrors case_012)",
+    instruction="buy 100 shares of SOFI",
+    fixture="unused",
+    expected=ExpectedOutcome(
+        decision=Decision.ALLOW,
+        rules_fired=("R5_WASH_SALE",),
+        orders=(Order(symbol="SOFI", side="buy", order_type="market", qty=Decimal(100)),),
+    ),
 )
 
 
@@ -89,12 +107,11 @@ def test_score_case_rules_match_on_exact_set() -> None:
     report = RiskReport(
         plan_id=plan.plan_id,
         decision=Decision.BLOCK,
-        rule_results=(
-            RuleResult(
-                rule_id="R2",
-                rule_name="pdt",
-                passed=False,
+        rules_fired=(
+            FiredRule(
+                rule_id="R2_PDT",
                 severity=Severity.BLOCKING,
+                disposition=Disposition.BLOCKED,
                 explanation="day trade #4 on sub-$25k equity account",
             ),
         ),
@@ -122,6 +139,49 @@ def test_aggregate_on_one_pass_one_fail() -> None:
     assert summary.false_block_rate == 0.0
     assert summary.mean_latency_s == 0.03
     assert summary.total_llm_calls == 3
+
+
+def test_catch_rate_and_false_block_rate_definitions() -> None:
+    """Demonstrates both the fix and the case it fixes: a system that misses the
+    wash-sale warning entirely gets decision_match=True (ALLOW == ALLOW) but must NOT
+    count as "caught" -- this is the exact loophole the old decision-based catch_rate
+    definition let through."""
+    # Case with a violation, correctly caught (rules_match True).
+    plan_block = _plan(CASE_BLOCK)
+    report_block_correct = RiskReport(
+        plan_id=plan_block.plan_id,
+        decision=Decision.BLOCK,
+        rules_fired=(
+            FiredRule(
+                rule_id="R2_PDT",
+                severity=Severity.BLOCKING,
+                disposition=Disposition.BLOCKED,
+                explanation="day trade #4 on sub-$25k equity account",
+            ),
+        ),
+    )
+    caught_score = score_case(CASE_BLOCK, plan_block, report_block_correct, latency_s=0.01, llm_calls=0)
+
+    # Case with a violation (a warning), missed entirely -> not caught, even though
+    # decision still happens to match (ALLOW == ALLOW).
+    plan_warn = _plan(CASE_ALLOW_WITH_WARNING, orders=CASE_ALLOW_WITH_WARNING.expected.orders)
+    report_missed_warning = RiskReport(plan_id=plan_warn.plan_id, decision=Decision.ALLOW, rules_fired=())
+    missed_score = score_case(CASE_ALLOW_WITH_WARNING, plan_warn, report_missed_warning, latency_s=0.01, llm_calls=0)
+
+    # Expected-ALLOW case (CASE_ALLOW), correctly allowed -> not a false block.
+    plan_allow = _plan(CASE_ALLOW, orders=CASE_ALLOW.expected.orders)
+    report_allow = RiskReport(plan_id=plan_allow.plan_id, decision=Decision.ALLOW, rules_fired=())
+    allow_score = score_case(CASE_ALLOW, plan_allow, report_allow, latency_s=0.01, llm_calls=0)
+
+    summary = aggregate([caught_score, missed_score, allow_score])
+
+    # catch_rate denominator = cases with non-empty expected.rules_fired = {CASE_BLOCK, CASE_ALLOW_WITH_WARNING} = 2.
+    # Of those, only CASE_BLOCK was correctly detected (rules_match True) -> 1/2 = 50%.
+    assert summary.catch_rate == 50.0
+
+    # false_block_rate denominator = expected-ALLOW cases = {CASE_ALLOW_WITH_WARNING, CASE_ALLOW} = 2.
+    # Neither was blocked or repaired (both actual_decision == ALLOW) -> 0/2 = 0%.
+    assert summary.false_block_rate == 0.0
 
 
 def test_aggregate_empty_scores() -> None:

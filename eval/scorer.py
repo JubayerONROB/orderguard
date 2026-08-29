@@ -2,9 +2,14 @@
 
 Per case: `decision_match`, `rules_match` (exact set equality), `orders_match`
 (field-by-field, order-independent), and `case_pass` (all three). Across cases:
-`primary_score` (% cases passing), `catch_rate` (recall on non-ALLOW cases),
-`false_block_rate` (% of ALLOW cases the system wrongly didn't ALLOW), plus latency
-and LLM-call totals.
+`primary_score` (% cases passing), `catch_rate` (recall on cases with a non-empty
+`expected.rules_fired`), `false_block_rate` (% of expected-ALLOW cases the system
+blocked or repaired instead), plus latency and LLM-call totals.
+
+`catch_rate` is keyed on `rules_match`, not on `decision != ALLOW`: a case can expect
+ALLOW while still expecting a rule to fire (a WARNING-severity rule, e.g. wash sale,
+never blocks). Keying catch_rate off decision would let a system that misses the
+warning entirely still "catch" that case, since its decision matches trivially.
 """
 
 from __future__ import annotations
@@ -78,6 +83,10 @@ class CaseScore:
     case_pass: bool
     expected_decision: Decision
     actual_decision: Decision
+    expected_has_violation: bool
+    """True iff `case.expected.rules_fired` is non-empty -- i.e. at least one rule was
+    supposed to fire, whether or not it ultimately blocked the basket. Drives
+    `catch_rate`'s denominator."""
     latency_s: float
     llm_calls: int
 
@@ -91,9 +100,7 @@ def score_case(
 ) -> CaseScore:
     """Scores one system run against `case`'s expected outcome."""
     decision_match = actual_report.decision == case.expected.decision
-    rules_match = frozenset(r.rule_id + "_" + r.rule_name.upper() for r in actual_report.rule_results) == frozenset(
-        case.expected.rules_fired
-    )
+    rules_match = frozenset(f.rule_id for f in actual_report.rules_fired) == frozenset(case.expected.rules_fired)
     orders_match = compare_orders(
         actual_plan.orders,
         case.expected.orders,
@@ -108,6 +115,7 @@ def score_case(
         case_pass=decision_match and rules_match and orders_match,
         expected_decision=case.expected.decision,
         actual_decision=actual_report.decision,
+        expected_has_violation=len(case.expected.rules_fired) > 0,
         latency_s=latency_s,
         llm_calls=llm_calls,
     )
@@ -121,8 +129,9 @@ class Summary:
     primary_score: float
     """% of cases where `case_pass` is True, in [0, 100]."""
     catch_rate: float | None
-    """Recall on cases whose expected decision is not ALLOW, in [0, 100]. None if no
-    such cases exist in the run."""
+    """% of cases with a non-empty `expected.rules_fired` where the system's
+    `rules_fired` exactly matched (recall on "did the system detect what it was
+    supposed to detect"), in [0, 100]. None if no such cases exist in the run."""
     false_block_rate: float | None
     """% of expected-ALLOW cases the system blocked or repaired instead, in [0, 100].
     None if no expected-ALLOW cases exist in the run."""
@@ -145,11 +154,9 @@ def aggregate(scores: list[CaseScore]) -> Summary:
 
     primary_score = 100.0 * sum(s.case_pass for s in scores) / total_cases
 
-    non_allow = [s for s in scores if s.expected_decision != Decision.ALLOW]
+    has_violation = [s for s in scores if s.expected_has_violation]
     catch_rate = (
-        100.0 * sum(s.actual_decision != Decision.ALLOW for s in non_allow) / len(non_allow)
-        if non_allow
-        else None
+        100.0 * sum(s.rules_match for s in has_violation) / len(has_violation) if has_violation else None
     )
 
     expect_allow = [s for s in scores if s.expected_decision == Decision.ALLOW]

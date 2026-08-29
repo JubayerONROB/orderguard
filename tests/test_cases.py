@@ -13,7 +13,7 @@ from orderguard.schemas.risk_report import Decision
 def test_seed_cases_load() -> None:
     cases = load_all_cases()
     ids = [c.id for c in cases]
-    assert ids == ["case_001", "case_002", "case_003"]
+    assert ids == [f"case_{i:03d}" for i in range(1, 19)]
 
 
 def test_case_001_is_clean_allow() -> None:

@@ -1,6 +1,7 @@
 {
   "account_id": "acct_pdt_002",
   "as_of": "2026-08-27T14:30:00Z",
+  "account_type": "margin",
   "equity": "19000.00",
   "cash": "7650.00",
   "buying_power": "15300.00",

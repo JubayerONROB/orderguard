@@ -19,6 +19,7 @@ def test_account_state_round_trip() -> None:
     state = AccountState(
         account_id="acct_1",
         as_of=NOW,
+        account_type="margin",
         equity=Decimal("10000.00"),
         cash=Decimal("10000.00"),
         buying_power=Decimal("10000.00"),

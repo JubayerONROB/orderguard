@@ -36,6 +36,13 @@ class LLMClient(Protocol):
         ...
 
 
+AGNES_DEFAULT_TEMPERATURE = 0
+"""Default sampling temperature for Agnes completions. The compiler and repair agent
+are the only components that call an LLM, and eval reproducibility depends on the
+model being as deterministic as the provider allows -- 0 is that ceiling, not a
+tuning choice, so it's the default rather than something callers pick per-call."""
+
+
 class AgnesClient:
     """`LLMClient` backed by Agnes's OpenAI-compatible chat-completions endpoint.
 
@@ -51,12 +58,14 @@ class AgnesClient:
         model: str,
         timeout: int,
         max_retries: int,
+        temperature: float = AGNES_DEFAULT_TEMPERATURE,
     ) -> None:
         self._base_url = base_url
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
         self._max_retries = max_retries
+        self._temperature = temperature
 
     def complete(self, system: str, user: str, response_schema: type[SchemaT]) -> SchemaT:
         raise NotImplementedError

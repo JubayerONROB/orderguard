@@ -17,12 +17,19 @@ from pathlib import Path
 from eval.cases import CASES_DIR, CaseLoadError, load_all_cases, load_case
 from eval.fixtures import FIXTURES_DIR, FixtureLoadError, load_fixture
 from eval.scorer import CaseScore, aggregate, format_report, score_case
-from eval.systems import AgentSystem, BaselineSystem, NullSystem, System
+from eval.systems import (
+    AgentSystem,
+    BaselineSystem,
+    NullSystem,
+    RuleEngineSystem,
+    System,
+)
 
 SYSTEMS: dict[str, System] = {
     "null": NullSystem(),
     "baseline": BaselineSystem(),
     "agent": AgentSystem(),
+    "rules_only": RuleEngineSystem(),
 }
 
 DEFAULT_OUT_DIR = Path(__file__).parent / "runs"

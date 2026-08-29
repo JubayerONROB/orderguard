@@ -16,17 +16,22 @@ from orderguard.schemas.order_plan import (
 )
 from orderguard.schemas.risk_report import (
     Decision,
+    Disposition,
+    FiredRule,
     Repair,
     RiskReport,
     RuleResult,
     Severity,
 )
+from orderguard.schemas.user_constraints import UserConstraints
 
 __all__ = [
     "AccountState",
     "Activity",
     "AssetMeta",
     "Decision",
+    "Disposition",
+    "FiredRule",
     "MarketClock",
     "MarketSnapshot",
     "OpenOrder",
@@ -41,4 +46,5 @@ __all__ = [
     "RuleResult",
     "Severity",
     "TimeInForce",
+    "UserConstraints",
 ]
