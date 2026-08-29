@@ -24,15 +24,22 @@ from eval.systems import (
     RuleEngineSystem,
     System,
 )
-
-SYSTEMS: dict[str, System] = {
-    "null": NullSystem(),
-    "baseline": BaselineSystem(),
-    "agent": AgentSystem(),
-    "rules_only": RuleEngineSystem(),
-}
+from orderguard.llm.cassette import resolve_mode
 
 DEFAULT_OUT_DIR = Path(__file__).parent / "runs"
+
+
+def _build_systems(llm_mode: str | None) -> dict[str, System]:
+    """LLM-backed systems (agent, baseline) are reconstructed with the resolved mode
+    each run so `--llm-mode` (or its env var) actually takes effect; null/rules_only
+    never touch an LLM and don't care."""
+    mode = resolve_mode(llm_mode)
+    return {
+        "null": NullSystem(),
+        "baseline": BaselineSystem(mode=mode),
+        "agent": AgentSystem(mode=mode),
+        "rules_only": RuleEngineSystem(),
+    }
 
 
 def _case_score_to_dict(score: CaseScore) -> dict:
@@ -42,14 +49,14 @@ def _case_score_to_dict(score: CaseScore) -> dict:
     return d
 
 
-def run(system_name: str, case_id: str | None, out_dir: Path) -> int:
+def run(system_name: str, case_id: str | None, out_dir: Path, llm_mode: str | None = None) -> int:
     """Runs `system_name` over all (or one) case(s), prints and persists the results.
 
     Returns:
         Process exit code: 0 if every case scored (regardless of pass/fail), 1 if a
         case or fixture failed to *load*.
     """
-    system = SYSTEMS[system_name]
+    system = _build_systems(llm_mode)[system_name]
 
     try:
         if case_id is not None:
@@ -98,7 +105,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the OrderGuard eval harness.")
     parser.add_argument(
         "--system",
-        choices=sorted(SYSTEMS),
+        choices=("null", "baseline", "agent", "rules_only"),
         required=True,
         help="Which system to evaluate.",
     )
@@ -113,8 +120,14 @@ def main() -> None:
         default=DEFAULT_OUT_DIR,
         help="Directory to write the timestamped JSON result file into.",
     )
+    parser.add_argument(
+        "--llm-mode",
+        choices=("live", "replay", "auto"),
+        default=None,
+        help="Cassette mode for agent/baseline (live|replay|auto). Overrides ORDERGUARD_LLM_MODE; defaults to auto.",
+    )
     args = parser.parse_args()
-    sys.exit(run(args.system, args.case, args.out))
+    sys.exit(run(args.system, args.case, args.out, args.llm_mode))
 
 
 if __name__ == "__main__":

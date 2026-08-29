@@ -1,23 +1,31 @@
-"""Systems the eval harness can run: `null`, `baseline`, `agent`.
+"""Systems the eval harness can run: `null`, `rules_only`, `baseline`, `agent`.
 
-Each implements `System.run(case, fixture) -> SystemResult`. `NullSystem` is the only
-one implemented here -- it exists purely to prove the harness runs end to end and to
-establish the scoring floor. `baseline` (single-prompt) and `agent` (full OrderGuard
-pipeline: compiler -> rule engine -> repair) are wired into `run_eval.py`'s CLI but
-raise `NotImplementedError` until those components exist.
+Each implements `System.run(case, fixture) -> SystemResult`. `NullSystem` establishes
+the scoring floor (no LLM, no rules). `RuleEngineSystem` isolates rule-engine accuracy
+by running `case.naive_plan` straight through `RuleEngine`. `BaselineSystem` and
+`AgentSystem` both call the (cassette-cached) LLM -- see `eval/baselines/single_prompt.py`
+and `orderguard.compiler.intent_compiler` for what each actually asks the model to do.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
+from eval.baselines.single_prompt import run_single_prompt_baseline
 from eval.cases import EvalCase
 from eval.fixtures import Fixture
+from eval.llm_setup import CountingLLMClient, build_llm_client
+from orderguard.audit.trajectory import TrajectoryLogger
+from orderguard.compiler.intent_compiler import IntentCompiler
+from orderguard.llm.cassette import CassetteMode
 from orderguard.rules.engine import RuleEngine
 from orderguard.schemas.order_plan import OrderPlan
 from orderguard.schemas.risk_report import Decision, RiskReport
+
+TRAJECTORIES_DIR = Path(__file__).parent / "runs" / "trajectories"
 
 
 @dataclass(frozen=True)
@@ -83,21 +91,57 @@ class RuleEngineSystem:
 
 
 class BaselineSystem:
-    """Single-prompt baseline: one model call with broker tools, no rule engine.
-
-    Not implemented yet -- see `eval/baselines/single_prompt.py`.
+    """Single-prompt baseline: one model call, no rule engine -- see
+    `eval/baselines/single_prompt.py` for why this is the fair comparison for `agent`.
     """
 
+    def __init__(self, mode: CassetteMode | None = None) -> None:
+        self._mode = mode
+
     def run(self, case: EvalCase, fixture: Fixture) -> SystemResult:
-        raise NotImplementedError("baseline system is not implemented yet")
+        start = time.perf_counter()
+        llm_client = CountingLLMClient(build_llm_client(self._mode))
+        response = run_single_prompt_baseline(
+            case.instruction, fixture.account, fixture.market, case.user_constraints, llm_client
+        )
+        plan = OrderPlan(
+            account_id=fixture.account.account_id,
+            source_instruction=case.instruction,
+            orders=response.orders,
+            cancellations=response.cancellations,
+        )
+        report = RiskReport(
+            plan_id=plan.plan_id,
+            decision=response.decision,
+            rule_results=(),
+            rules_fired=response.rules_fired,
+        )
+        latency_s = time.perf_counter() - start
+        return SystemResult(plan=plan, report=report, latency_s=latency_s, llm_calls=llm_client.call_count)
 
 
 class AgentSystem:
-    """Full OrderGuard pipeline: IntentCompiler -> RuleEngine -> RepairAgent.
+    """Full OrderGuard pipeline: IntentCompiler -> RuleEngine.
 
-    Not implemented yet -- rule logic, the compiler, and the repair agent are all
-    still `NotImplementedError` stubs.
+    Mirrors `RuleEngineSystem` but compiles the basket from the instruction via a real
+    (cassette-cached) LLM call instead of reading `case.naive_plan` -- this is the
+    end-to-end system whose accuracy includes compiler accuracy, not just rule-engine
+    accuracy.
     """
 
+    def __init__(self, mode: CassetteMode | None = None) -> None:
+        self._mode = mode
+        self._engine = RuleEngine()
+
     def run(self, case: EvalCase, fixture: Fixture) -> SystemResult:
-        raise NotImplementedError("agent system is not implemented yet")
+        start = time.perf_counter()
+        llm_client = CountingLLMClient(build_llm_client(self._mode))
+        trajectory = TrajectoryLogger(TRAJECTORIES_DIR / f"{case.id}.jsonl")
+        compiler = IntentCompiler(llm_client, trajectory=trajectory)
+
+        naive_plan = compiler.compile(case.instruction, fixture.account, fixture.market, case.user_constraints)
+        final_plan, report = self._engine.evaluate(
+            naive_plan, fixture.account, fixture.market, case.user_constraints
+        )
+        latency_s = time.perf_counter() - start
+        return SystemResult(plan=final_plan, report=report, latency_s=latency_s, llm_calls=llm_client.call_count)

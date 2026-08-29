@@ -25,6 +25,9 @@ class Settings(BaseSettings):
 
     agnes_base_url: str = Field(alias="AGNES_BASE_URL")
     agnes_api_key: str = Field(alias="AGNES_API_KEY")
+    agnes_model_flash: str = Field(alias="AGNES_MODEL_FLASH")
+    agnes_model_pro: str = Field(alias="AGNES_MODEL_PRO")
+    agnes_model_turbo: str = Field(alias="AGNES_MODEL_TURBO")
     agnes_default_model: str = Field(alias="AGNES_DEFAULT_MODEL")
     agnes_timeout: int = Field(alias="AGNES_TIMEOUT")
     agnes_max_retries: int = Field(alias="AGNES_MAX_RETRIES")

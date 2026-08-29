@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import Protocol, TypeVar
 
+import httpx
 from pydantic import BaseModel
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -43,12 +44,25 @@ model being as deterministic as the provider allows -- 0 is that ceiling, not a
 tuning choice, so it's the default rather than something callers pick per-call."""
 
 
+class AgnesTransportError(Exception):
+    """Raised when every retry against Agnes's HTTP endpoint fails (network, timeout,
+    non-2xx status). Distinct from a schema-validation failure -- see
+    `compiler/intent_compiler.py` for how those two failure modes are handled
+    differently (this one isn't retried at the compiler level at all; `max_retries`
+    below already covers transient transport failures)."""
+
+
 class AgnesClient:
     """`LLMClient` backed by Agnes's OpenAI-compatible chat-completions endpoint.
 
     Built from `agnes.json`'s declared shape: Bearer-token auth against `base_url`,
     JSON-mode/structured output requested via `response_schema`, and model selection
     via a plain string (e.g. `default_model`).
+
+    `max_retries` here covers only transport-level failures (timeouts, non-2xx,
+    connection errors) -- retrying a schema-invalid response is a different concern,
+    handled one level up by the caller (e.g. `IntentCompiler`), since only the caller
+    knows how to usefully append the validation error to the next prompt.
     """
 
     def __init__(
@@ -60,7 +74,7 @@ class AgnesClient:
         max_retries: int,
         temperature: float = AGNES_DEFAULT_TEMPERATURE,
     ) -> None:
-        self._base_url = base_url
+        self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
@@ -68,7 +82,48 @@ class AgnesClient:
         self._temperature = temperature
 
     def complete(self, system: str, user: str, response_schema: type[SchemaT]) -> SchemaT:
-        raise NotImplementedError
+        schema = response_schema.model_json_schema()
+        user_with_schema = (
+            f"{user}\n\n---\n"
+            f"Respond with ONLY a single JSON object matching this JSON Schema. "
+            f"No prose, no markdown code fences, no explanation -- just the JSON object.\n\n"
+            f"{json.dumps(schema)}"
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_with_schema},
+        ]
+
+        last_error: Exception | None = None
+        response = None
+        for _ in range(self._max_retries + 1):
+            try:
+                response = httpx.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": self._model,
+                        "temperature": self._temperature,
+                        "messages": messages,
+                        "response_format": {"type": "json_object"},
+                    },
+                    timeout=self._timeout,
+                )
+                response.raise_for_status()
+                break
+            except httpx.HTTPError as e:
+                last_error = e
+                response = None
+                continue
+
+        if response is None:
+            raise AgnesTransportError(
+                f"Agnes completion failed after {self._max_retries + 1} attempt(s): {last_error}"
+            ) from last_error
+
+        content = response.json()["choices"][0]["message"]["content"]
+        payload = json.loads(content)  # json.JSONDecodeError propagates to the caller
+        return response_schema.model_validate(payload)  # pydantic.ValidationError propagates to the caller
 
 
 class MockLLMClient:
