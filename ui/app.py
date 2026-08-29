@@ -70,24 +70,59 @@ DECISION_LABEL = {
 
 
 def _load_live_state() -> tuple[AccountState, MarketSnapshot]:
-    """Live mode: real Alpaca account, market snapshot limited to held-position
-    symbols (Alpaca quote data for symbols the compiler might newly introduce isn't
-    fetchable until after compiling, so this is a known, accepted limitation)."""
+    """Live mode: real Alpaca account, market snapshot seeded with asset eligibility
+    for symbols already known (held positions + open orders). A symbol the compiler
+    newly introduces (not currently held or open) won't have eligibility data yet --
+    see `_augment_market_with_live_assets`, called after compiling, to fill that in
+    for exactly the symbols the compiled basket actually touches."""
     client = AlpacaClient(get_settings())
     account = client.get_account_state()
     clock = client._client.get_clock()
+    known_symbols = {p.symbol for p in account.positions} | {oo.symbol for oo in account.open_orders}
     market = MarketSnapshot(
         as_of=account.as_of,
         quotes=(),
-        assets=tuple(
-            AssetMeta(symbol=p.symbol, tradable=True, fractionable=True, shortable=True, asset_class=p.asset_class)
-            for p in account.positions
-        ),
+        assets=_fetch_asset_meta(client, known_symbols),
         clock=MarketClock(
             timestamp=clock.timestamp, is_open=clock.is_open, next_open=clock.next_open, next_close=clock.next_close
         ),
     )
     return account, market
+
+
+def _fetch_asset_meta(client: AlpacaClient, symbols: set[str]) -> tuple[AssetMeta, ...]:
+    """Fetches real Alpaca eligibility flags for `symbols`. A symbol that fails to
+    look up is simply omitted -- R7 then fails closed for it (no data = not eligible),
+    which is the safe default, not a silent pass."""
+    assets = []
+    for symbol in symbols:
+        try:
+            asset = client._client.get_asset(symbol)
+        except Exception:  # noqa: BLE001, S112 -- an unlookupable symbol should fail R7 closed, not crash the page
+            continue
+        assets.append(
+            AssetMeta(
+                symbol=symbol,
+                tradable=bool(asset.tradable),
+                fractionable=bool(asset.fractionable),
+                shortable=bool(asset.shortable),
+                asset_class=str(asset.asset_class),
+            )
+        )
+    return tuple(assets)
+
+
+def _augment_market_with_live_assets(market: MarketSnapshot, symbols: set[str]) -> MarketSnapshot:
+    """Extends `market.assets` with real eligibility data for any of `symbols` not
+    already covered -- called after compiling, once the actual traded symbols are
+    known, so a newly-introduced symbol (not currently held or open) still gets real
+    R7 data instead of being treated as ineligible for lack of a lookup."""
+    known = {a.symbol for a in market.assets}
+    missing = symbols - known
+    if not missing:
+        return market
+    client = AlpacaClient(get_settings())
+    return market.model_copy(update={"assets": market.assets + _fetch_asset_meta(client, missing)})
 
 
 def _fixture_names() -> list[str]:
@@ -312,6 +347,8 @@ def main() -> None:
             st.error(f"Could not compile this instruction: {e}")
             st.session_state.reviewed = False
             return
+        if not fixture_mode:
+            market = _augment_market_with_live_assets(market, {o.symbol for o in naive_plan.orders})
         final_plan, report = RuleEngine().evaluate(naive_plan, account, market, constraints)
 
         st.session_state.reviewed = True

@@ -70,7 +70,9 @@ class AlpacaClient:
             unsettled_cash=Decimal(0),  # not directly exposed by Alpaca's account model
             buying_power=Decimal(str(account.buying_power)),
             pattern_day_trader=bool(account.pattern_day_trader),
-            daytrade_count=int(account.daytrade_count),
+            daytrade_count=int(account.daytrade_count) if account.daytrade_count is not None else 0,
+            # Alpaca returns None (not 0) for an account with no day-trade history yet,
+            # e.g. a freshly created paper account -- 0 is the correct read of that.
             positions=tuple(
                 Position(
                     symbol=p.symbol,
