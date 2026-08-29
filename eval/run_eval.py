@@ -28,6 +28,14 @@ from orderguard.llm.cassette import resolve_mode
 
 DEFAULT_OUT_DIR = Path(__file__).parent / "runs"
 
+SUITES = {
+    "main": (CASES_DIR, FIXTURES_DIR),
+    "holdout": (Path(__file__).parent / "cases_holdout", Path(__file__).parent / "fixtures_holdout"),
+}
+"""`holdout` is a held-out set written after the main 18 drove two fixes (see
+docs/IMPROVEMENT_CHANGELOG.md) -- run it, but never let its results drive further
+changes; that would just make it the next training set."""
+
 
 def _build_systems(llm_mode: str | None) -> dict[str, System]:
     """LLM-backed systems (agent, baseline) are reconstructed with the resolved mode
@@ -49,7 +57,13 @@ def _case_score_to_dict(score: CaseScore) -> dict:
     return d
 
 
-def run(system_name: str, case_id: str | None, out_dir: Path, llm_mode: str | None = None) -> int:
+def run(
+    system_name: str,
+    case_id: str | None,
+    out_dir: Path,
+    llm_mode: str | None = None,
+    suite: str = "main",
+) -> int:
     """Runs `system_name` over all (or one) case(s), prints and persists the results.
 
     Returns:
@@ -57,12 +71,13 @@ def run(system_name: str, case_id: str | None, out_dir: Path, llm_mode: str | No
         case or fixture failed to *load*.
     """
     system = _build_systems(llm_mode)[system_name]
+    cases_dir, fixtures_dir = SUITES[suite]
 
     try:
         if case_id is not None:
-            cases = [load_case(CASES_DIR / f"{case_id}.json")]
+            cases = [load_case(cases_dir / f"{case_id}.json")]
         else:
-            cases = load_all_cases()
+            cases = load_all_cases(cases_dir=cases_dir)
     except CaseLoadError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -70,7 +85,7 @@ def run(system_name: str, case_id: str | None, out_dir: Path, llm_mode: str | No
     scores: list[CaseScore] = []
     for case in cases:
         try:
-            fixture = load_fixture(case.fixture, fixtures_dir=FIXTURES_DIR)
+            fixture = load_fixture(case.fixture, fixtures_dir=fixtures_dir)
         except FixtureLoadError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
@@ -84,11 +99,12 @@ def run(system_name: str, case_id: str | None, out_dir: Path, llm_mode: str | No
 
     out_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_path = out_dir / f"{system_name}_{timestamp}.json"
+    out_path = out_dir / f"{system_name}_{suite}_{timestamp}.json"
     out_path.write_text(
         json.dumps(
             {
                 "system": system_name,
+                "suite": suite,
                 "timestamp": timestamp,
                 "cases": [_case_score_to_dict(s) for s in scores],
                 "summary": asdict(summary),
@@ -126,8 +142,15 @@ def main() -> None:
         default=None,
         help="Cassette mode for agent/baseline (live|replay|auto). Overrides ORDERGUARD_LLM_MODE; defaults to auto.",
     )
+    parser.add_argument(
+        "--suite",
+        choices=sorted(SUITES),
+        default="main",
+        help="Which case suite to run: 'main' (the 18 cases that drove development) or "
+        "'holdout' (written after, never used to drive further changes).",
+    )
     args = parser.parse_args()
-    sys.exit(run(args.system, args.case, args.out, args.llm_mode))
+    sys.exit(run(args.system, args.case, args.out, args.llm_mode, args.suite))
 
 
 if __name__ == "__main__":
