@@ -1,8 +1,14 @@
 """Constructs the cassette-cached Agnes client eval systems share.
 
-Loads real settings from `.env` (base URL, API key, model) but every call goes through
-`CachedLLMClient`, so the mode (`live`/`replay`/`auto`) governs whether the network is
-ever actually touched.
+In `live`/`auto` mode, loads real settings from `.env` (base URL, API key, model) --
+those modes can genuinely reach the network. In `replay` mode, `.env` is never read at
+all: the underlying `AgnesClient` is built from a placeholder that's guaranteed never
+to be called (`CachedLLMClient` raises `CassetteMissError` on a miss before ever
+touching it), using `_REPLAY_MODEL_FALLBACK` for the `model` field specifically because
+that value is part of the cassette cache key and must match what recorded the cassette.
+This is what makes "replay needs no API key" (see docs/REPRODUCTION.md) literally true
+rather than aspirational -- constructing `Settings()` unconditionally here would fail
+loudly on a machine with no `.env` at all, even for a pure cache replay.
 """
 
 from __future__ import annotations
@@ -16,6 +22,11 @@ from orderguard.llm.cassette import CachedLLMClient, CassetteMode, resolve_mode
 from orderguard.llm.client import AGNES_DEFAULT_TEMPERATURE, AgnesClient, LLMClient
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
+
+_REPLAY_MODEL_FALLBACK = "agnes-2.5-flash"
+"""Must match the `AGNES_DEFAULT_MODEL` value used to record `eval/cassettes/` (see
+`.env.example`'s AGNES_MODEL_FLASH) -- not a secret, just an identifier, and part of the
+cassette cache key, so replay mode needs the real value here even without real credentials."""
 
 
 class CountingLLMClient:
@@ -41,6 +52,24 @@ def build_llm_client(mode: CassetteMode | None = None) -> CachedLLMClient:
     Args:
         mode: overrides the resolved mode (CLI flag > env var > "auto") when given.
     """
+    resolved_mode = mode if mode is not None else resolve_mode()
+
+    if resolved_mode == CassetteMode.REPLAY:
+        inner = AgnesClient(
+            base_url="unused-in-replay-mode",
+            api_key="unused-in-replay-mode",
+            model=_REPLAY_MODEL_FALLBACK,
+            timeout=1,
+            max_retries=0,
+            temperature=AGNES_DEFAULT_TEMPERATURE,
+        )
+        return CachedLLMClient(
+            inner=inner,
+            model=_REPLAY_MODEL_FALLBACK,
+            temperature=AGNES_DEFAULT_TEMPERATURE,
+            mode=resolved_mode,
+        )
+
     settings = get_settings()
     inner = AgnesClient(
         base_url=settings.agnes_base_url,
@@ -54,5 +83,5 @@ def build_llm_client(mode: CassetteMode | None = None) -> CachedLLMClient:
         inner=inner,
         model=settings.agnes_default_model,
         temperature=AGNES_DEFAULT_TEMPERATURE,
-        mode=mode if mode is not None else resolve_mode(),
+        mode=resolved_mode,
     )

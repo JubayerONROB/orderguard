@@ -20,12 +20,12 @@ import streamlit as st
 
 from eval.cases import CASES_DIR, load_case
 from eval.fixtures import FIXTURES_DIR, Fixture, load_fixture
+from eval.llm_setup import build_llm_client
 from orderguard.audit.trajectory import TrajectoryLogger
 from orderguard.broker.alpaca_client import AlpacaClient
 from orderguard.compiler.intent_compiler import IntentCompiler
 from orderguard.config import get_settings
-from orderguard.llm.cassette import CachedLLMClient, CassetteMode
-from orderguard.llm.client import AGNES_DEFAULT_TEMPERATURE, AgnesClient
+from orderguard.llm.cassette import CassetteMode
 from orderguard.rules._util import is_buy, is_sell, order_notional_value
 from orderguard.rules.engine import RuleEngine
 from orderguard.schemas.account_state import AccountState
@@ -56,19 +56,6 @@ DECISION_LABEL = {
     Decision.ALLOW_WITH_REPAIRS: "ALLOW WITH REPAIRS",
     Decision.BLOCK: "BLOCKED",
 }
-
-
-def _build_llm_client(mode: CassetteMode) -> CachedLLMClient:
-    settings = get_settings()
-    inner = AgnesClient(
-        base_url=settings.agnes_base_url,
-        api_key=settings.agnes_api_key,
-        model=settings.agnes_default_model,
-        timeout=settings.agnes_timeout,
-        max_retries=settings.agnes_max_retries,
-        temperature=AGNES_DEFAULT_TEMPERATURE,
-    )
-    return CachedLLMClient(inner=inner, model=settings.agnes_default_model, temperature=AGNES_DEFAULT_TEMPERATURE, mode=mode)
 
 
 def _load_live_state() -> tuple[AccountState, MarketSnapshot]:
@@ -296,7 +283,7 @@ def main() -> None:
 
     if st.button("Review this", type="primary"):
         llm_mode = CassetteMode.REPLAY if fixture_mode else CassetteMode.AUTO
-        llm_client = _build_llm_client(llm_mode)
+        llm_client = build_llm_client(llm_mode)
         trajectory = TrajectoryLogger(TRAJECTORY_PATH)
         compiler = IntentCompiler(llm_client, trajectory=trajectory)
         try:
