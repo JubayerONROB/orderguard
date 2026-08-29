@@ -89,6 +89,10 @@ class ConcentrationRule:
     id = "R3"
     name = "concentration"
     severity = Severity.BLOCKING
+    always_repairable = False
+    """Almost always repairable (resize down), but NOT unconditionally: if a symbol has
+    more than one buy order in the basket, repair() skips it rather than guess how to
+    split headroom (see repair()'s docstring note) -- a genuine no-fix case, unlike R4."""
 
     def check(
         self,

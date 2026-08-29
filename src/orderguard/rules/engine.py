@@ -110,9 +110,12 @@ class RuleEngine:
                 continue
 
             repaired_plan = rule.repair(working_plan, state, market, constraints, current)
-            if repaired_plan == working_plan:
+            if repaired_plan == working_plan and not rule.always_repairable:
+                # A genuine no-fix case (e.g. R2/R6 when deferral would empty the basket).
                 disposition = Disposition.BLOCKED
             else:
+                # Either repair() changed the plan, or (always_repairable rules only)
+                # the fix was already present -- both count as REPAIRED.
                 disposition = Disposition.REPAIRED
                 working_plan = repaired_plan
             source = original_failures.get(rule.id, current)

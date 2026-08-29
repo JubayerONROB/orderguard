@@ -128,6 +128,40 @@ def test_engine_cascading_repair_credits_both_rules() -> None:
     assert final_plan.orders[0].qty == Decimal(10)  # unchanged: already fits once the stale order is gone
 
 
+def test_engine_records_r4_when_naive_plan_already_cancels_it() -> None:
+    """Reproduces the live case_003 bug: a compiled plan that ALREADY includes the
+    cancellation for a stacking open order must still surface R4 in rules_fired
+    (disposition REPAIRED) -- otherwise the trader never learns the conflict existed."""
+    state = _state(
+        open_orders=(
+            OpenOrder(
+                order_id="ord_ibm_1",
+                symbol="IBM",
+                side="buy",
+                qty=Decimal(10),
+                order_type="limit",
+                limit_price=Decimal("190.00"),
+                status="open",
+                submitted_at=NOW,
+            ),
+        ),
+    )
+    plan = OrderPlan(
+        account_id="acct_1",
+        source_instruction="buy 15 more IBM",
+        orders=(Order(symbol="IBM", side="buy", order_type="market", qty=Decimal(15)),),
+        cancellations=("ord_ibm_1",),  # pre-emptively cancelled, e.g. by an overeager compiler
+    )
+    market = _market(quotes=(Quote(symbol="IBM", last_price=Decimal("190.00"), as_of=NOW),), assets=(_asset("IBM"),))
+    final_plan, report = RuleEngine().evaluate(plan, state, market, CONSTRAINTS)
+
+    assert report.decision == Decision.ALLOW_WITH_REPAIRS
+    fired = {f.rule_id: f for f in report.rules_fired}
+    assert "R4_OPEN_ORDERS" in fired
+    assert fired["R4_OPEN_ORDERS"].disposition == Disposition.REPAIRED
+    assert final_plan.cancellations == ("ord_ibm_1",)
+
+
 def test_engine_warning_only_still_allows() -> None:
     from orderguard.schemas.account_state import Activity
 

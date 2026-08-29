@@ -277,6 +277,41 @@ def test_open_orders_fails_and_repairs_by_cancelling() -> None:
     assert not result.passed
     assert result.order_index == 0
 
+
+def test_open_orders_still_fires_when_plan_already_cancels_it() -> None:
+    """Detection must not depend on remediation already having happened: a compiler
+    (or any upstream system) that pre-emptively cancels a stacking order must not make
+    the conflict invisible to the rule engine -- it still fires, disposition REPAIRED,
+    noting the cancellation was already present. This is the case_003 bug: R4 never
+    fired because the compiler had already added the cancellation itself."""
+    state = _state(
+        open_orders=(
+            OpenOrder(
+                order_id="ord_ibm_1",
+                symbol="IBM",
+                side="buy",
+                qty=Decimal(10),
+                order_type="limit",
+                limit_price=Decimal("190.00"),
+                status="open",
+                submitted_at=NOW,
+            ),
+        )
+    )
+    plan = _plan(
+        (Order(symbol="IBM", side="buy", order_type="market", qty=Decimal(15)),),
+        cancellations=("ord_ibm_1",),
+    )
+    result = OpenOrdersRule().check(plan, state, _market(), CONSTRAINTS)
+    assert not result.passed  # still fires -- detection ignores pre-existing cancellations
+    assert "already proposes cancelling" in result.explanation
+
+    # repair() is a no-op (nothing left to cancel), but always_repairable means the
+    # engine still dispositions this REPAIRED, not BLOCKED -- see test_engine.py.
+    repaired = OpenOrdersRule().repair(plan, state, _market(), CONSTRAINTS, result)
+    assert repaired == plan
+    assert OpenOrdersRule().always_repairable is True
+
     repaired = OpenOrdersRule().repair(plan, state, _market(), CONSTRAINTS, result)
     assert repaired.cancellations == ("ord_ibm_1",)
     assert repaired.orders == plan.orders  # order itself is untouched, only cancellation added

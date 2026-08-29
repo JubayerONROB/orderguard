@@ -43,6 +43,7 @@ class PdtRule:
     id = "R2"
     name = "pdt"
     severity = Severity.BLOCKING
+    always_repairable = False
 
     def check(
         self,

@@ -7,7 +7,7 @@ market data, and must ground every resulting order in real, current positions or
 tradable symbols -- it does not invent tickers or prices.
 
 The compiler produces the UNGUARDED plan. It does not check rules; `rules.engine`
-does. See `compiler/prompts/compile_v1.md` for the system prompt (versioned there,
+does. See `compiler/prompts/compile_v2.md` for the system prompt (versioned there,
 not inline here, so prompt changes are reviewable independent of code changes).
 """
 
@@ -27,7 +27,7 @@ from orderguard.schemas.order_plan import Order, OrderPlan
 from orderguard.schemas.user_constraints import UserConstraints
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-SYSTEM_PROMPT_PATH = PROMPTS_DIR / "compile_v1.md"
+SYSTEM_PROMPT_PATH = PROMPTS_DIR / "compile_v2.md"
 
 
 class CompilerError(Exception):

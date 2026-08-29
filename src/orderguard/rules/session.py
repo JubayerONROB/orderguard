@@ -32,6 +32,7 @@ class SessionRule:
     id = "R6"
     name = "session"
     severity = Severity.BLOCKING
+    always_repairable = False
 
     def check(
         self,

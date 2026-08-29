@@ -47,6 +47,14 @@ class Rule(Protocol):
 class RepairableRule(Rule, Protocol):
     """A `Rule` whose failures have a mechanically-unique fix (see CLAUDE.md)."""
 
+    always_repairable: bool
+    """True for R3/R4: their repair can never fail once attempted (a resize or a
+    cancellation always succeeds), so a `repair()` call that changes nothing means the
+    fix was already present, not that no fix exists -- the engine dispositions these
+    REPAIRED even on a no-op. False for R2/R6: deferring the offending order(s) can
+    genuinely fail (if it would empty the basket), so a no-op there really does mean
+    BLOCKED."""
+
     def repair(
         self,
         plan: OrderPlan,
@@ -58,9 +66,10 @@ class RepairableRule(Rule, Protocol):
         """Returns a new plan with this rule's violation addressed.
 
         Only called when `result.passed` is False (from a prior `check()` call against
-        `plan`). May return `plan` unchanged if THIS instance of the failure has no
-        valid repair -- e.g. R2/R6 when deferring the offending order(s) would leave
-        the basket empty. The engine treats an unchanged return as "no repair was
-        possible" and dispositions the rule BLOCKED rather than REPAIRED.
+        `plan`). May return `plan` unchanged either because the fix was already present
+        (`always_repairable = True`) or because THIS instance of the failure has no
+        valid repair at all (`always_repairable = False`, e.g. R2/R6 when deferring the
+        offending order(s) would leave the basket empty) -- the engine tells these two
+        cases apart via `always_repairable`, not by inspecting the returned plan.
         """
         ...
